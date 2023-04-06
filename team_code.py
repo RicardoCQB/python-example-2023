@@ -14,6 +14,7 @@ import numpy as np, os, sys
 import mne
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn import svm
 import joblib
 
 ################################################################################
@@ -71,6 +72,45 @@ def train_challenge_model(data_folder, model_folder, verbose):
     if verbose >= 1:
         print('Training the Challenge models on the Challenge data...')
 
+    #imputer, outcome_model, cpc_model = SupportVectorMachineModel(features, outcomes, cpcs)
+
+    # Preprocessing the data
+    recording_data = (recording_data - np.mean(recording_data, axis=0)) / np.std(recording_data, axis=0)
+
+    # Convert labels to one-hot encoding
+    y_train = to_categorical(y_train)
+    y_test = to_categorical(y_test)
+
+    # Define the CNN architecture using functional API
+    input_eeg = Input(shape=(channels, time_steps, 1))
+    conv1 = Conv2D(32, kernel_size=(3, 3), activation='relu')(input_eeg)
+    pool1 = MaxPooling2D(pool_size=(2, 2))(conv1)
+    conv2 = Conv2D(64, kernel_size=(3, 3), activation='relu')(pool1)
+    pool2 = MaxPooling2D(pool_size=(2, 2))(conv2)
+    flatten_eeg = Flatten()(pool2)
+
+    input_other = Input(shape=(other_features.shape[1],))
+    merged = concatenate([flatten_eeg, input_other])
+    dense1 = Dense(128, activation='relu')(merged)
+    output = Dense(num_classes, activation='softmax')(dense1)
+
+    model = Model(inputs=[input_eeg, input_other], outputs=output)
+
+    # Compile the model
+    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    # Train the model
+    model.fit([X_train_eeg, X_train_other], y_train, batch_size=32, epochs=10,
+              validation_data=([X_test_eeg, X_test_other], y_test))
+
+    # Save the models.
+    save_challenge_model(model_folder, imputer, outcome_model, cpc_model)
+
+    if verbose >= 1:
+        print('Done.')
+
+def RandomForestModel(features, outcomes, cpcs):
+
     # Define parameters for random forest classifier and regressor.
     n_estimators   = 123  # Number of trees in the forest.
     max_leaf_nodes = 456  # Maximum number of leaf nodes in each tree.
@@ -86,11 +126,27 @@ def train_challenge_model(data_folder, model_folder, verbose):
     cpc_model = RandomForestRegressor(
         n_estimators=n_estimators, max_leaf_nodes=max_leaf_nodes, random_state=random_state).fit(features, cpcs.ravel())
 
-    # Save the models.
-    save_challenge_model(model_folder, imputer, outcome_model, cpc_model)
+    return imputer, outcome_model, cpc_model
 
-    if verbose >= 1:
-        print('Done.')
+
+def SupportVectorMachineModel(features, outcomes, cpcs):
+    # Define parameters for support vector machine classifier and regressor.
+
+    # Impute any missing features; use the mean value by default.
+    imputer = SimpleImputer().fit(features)
+
+    # Train the models.
+    features = imputer.transform(features)
+    outcome_model = svm.SVC(C=1.0, gamma='scale', probability=True, kernel='rbf').fit(features, outcomes.ravel() )
+    cpc_model = svm.SVR(C=1.0, gamma='scale', kernel='rbf').fit(features, cpcs.ravel())
+
+    return imputer, outcome_model, cpc_model
+
+
+def CNNModel(features, outcomes, cpcs):
+    # Define parameters for CNN classifier and regressor.
+    ...
+
 
 # Load your trained models. This function is *required*. You should edit this function to add your code, but do *not* change the
 # arguments of this function.

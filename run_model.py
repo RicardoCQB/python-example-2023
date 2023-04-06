@@ -69,21 +69,25 @@ def run_model(model_folder, data_folder, output_folder, allow_failures, verbose)
 
 if __name__ == '__main__':
     # Parse the arguments.
-    if not (len(sys.argv) == 4 or len(sys.argv) == 5):
-        raise Exception('Include the model, data, and output folders as arguments, e.g., python run_model.py model data outputs.')
+    # if not (len(sys.argv) == 4 or len(sys.argv) == 5):
+    #     raise Exception('Include the model, data, and output folders as arguments, e.g., python run_model.py model data outputs.')
 
     # Define the model, data, and output folders.
-    model_folder = sys.argv[1]
-    data_folder = sys.argv[2]
-    output_folder = sys.argv[3]
+    # model_folder = sys.argv[1]
+    # data_folder = sys.argv[2]
+    # output_folder = sys.argv[3]
+    model_folder = 'model'
+    data_folder = 'test_data'
+    output_folder = 'test_outputs'
+    verbose = 2
 
     # Allow or disallow the model to fail on parts of the data; helpful for debugging.
     allow_failures = False
 
     # Change the level of verbosity; helpful for debugging.
-    if len(sys.argv)==5 and is_integer(sys.argv[4]):
-        verbose = int(sys.argv[4])
-    else:
-        verbose = 1
+    # if len(sys.argv)==5 and is_integer(sys.argv[4]):
+    #     verbose = int(sys.argv[4])
+    # else:
+    #     verbose = 1
 
     run_model(model_folder, data_folder, output_folder, allow_failures, verbose)
