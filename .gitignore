@@ -4,3 +4,4 @@
 *.mat
 *.txt
 training_data/*
+test_data/*
