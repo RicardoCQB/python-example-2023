@@ -12,10 +12,20 @@
 from helper_code import *
 import numpy as np, os, sys
 import mne
+from sklearn.model_selection import GridSearchCV
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn import svm
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.linear_model import LinearRegression
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import r2_score
 import joblib
+
 
 ################################################################################
 #
@@ -72,36 +82,11 @@ def train_challenge_model(data_folder, model_folder, verbose):
     if verbose >= 1:
         print('Training the Challenge models on the Challenge data...')
 
+    imputer = SimpleImputer().fit(features)
+    features = imputer.transform(features)
+
     #imputer, outcome_model, cpc_model = SupportVectorMachineModel(features, outcomes, cpcs)
 
-    # Preprocessing the data
-    recording_data = (recording_data - np.mean(recording_data, axis=0)) / np.std(recording_data, axis=0)
-
-    # Convert labels to one-hot encoding
-    y_train = to_categorical(y_train)
-    y_test = to_categorical(y_test)
-
-    # Define the CNN architecture using functional API
-    input_eeg = Input(shape=(channels, time_steps, 1))
-    conv1 = Conv2D(32, kernel_size=(3, 3), activation='relu')(input_eeg)
-    pool1 = MaxPooling2D(pool_size=(2, 2))(conv1)
-    conv2 = Conv2D(64, kernel_size=(3, 3), activation='relu')(pool1)
-    pool2 = MaxPooling2D(pool_size=(2, 2))(conv2)
-    flatten_eeg = Flatten()(pool2)
-
-    input_other = Input(shape=(other_features.shape[1],))
-    merged = concatenate([flatten_eeg, input_other])
-    dense1 = Dense(128, activation='relu')(merged)
-    output = Dense(num_classes, activation='softmax')(dense1)
-
-    model = Model(inputs=[input_eeg, input_other], outputs=output)
-
-    # Compile the model
-    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-
-    # Train the model
-    model.fit([X_train_eeg, X_train_other], y_train, batch_size=32, epochs=10,
-              validation_data=([X_test_eeg, X_test_other], y_test))
 
     # Save the models.
     save_challenge_model(model_folder, imputer, outcome_model, cpc_model)
