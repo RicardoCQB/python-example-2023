@@ -14,7 +14,7 @@ import numpy as np, os, sys
 import mne
 from sklearn.model_selection import GridSearchCV
 from sklearn.impute import SimpleImputer
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, AdaBoostClassifier
 from sklearn import svm
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import GaussianNB
@@ -82,14 +82,10 @@ def train_challenge_model(data_folder, model_folder, verbose):
     if verbose >= 1:
         print('Training the Challenge models on the Challenge data...')
 
-    imputer = SimpleImputer().fit(features)
-    features = imputer.transform(features)
-
-    #imputer, outcome_model, cpc_model = SupportVectorMachineModel(features, outcomes, cpcs)
-
+    imputer, outcome_model, cpc_model = SupportVectorMachineModel(features, outcomes, cpcs)
 
     # Save the models.
-    save_challenge_model(model_folder, imputer, outcome_model, cpc_model)
+    #save_challenge_model(model_folder, imputer, outcome_model, cpc_model)
 
     if verbose >= 1:
         print('Done.')
@@ -114,6 +110,74 @@ def RandomForestModel(features, outcomes, cpcs):
     return imputer, outcome_model, cpc_model
 
 
+def grid_search(features,outcomes, cpcs):
+    imputer = SimpleImputer().fit(features)
+
+    features = imputer.transform(features)
+    
+    rf_param_grid = {'n_estimators': [50, 100, 200],
+                     'max_depth': [10, 20, None],
+                     'min_samples_split': [2, 5, 10]}
+
+    svm_param_grid = {'C': [0.1, 1, 10],
+                      'gamma': ['scale', 'auto'],
+                      'kernel': ['linear', 'rbf']}
+
+    knn_param_grid = {'n_neighbors': [3, 5, 7],
+                      'weights': ['uniform', 'distance'],
+                      'algorithm': ['auto', 'ball_tree', 'kd_tree']}
+
+    nb_param_grid = {'var_smoothing': [1e-9, 1e-8, 1e-7]}
+
+    ada_param_grid = {'n_estimators': [50, 100, 200],
+                      'learning_rate': [0.1, 0.5, 1]}
+
+    # Define the parameter grid for each regression model
+    lr_param_grid = {}
+
+    dt_param_grid = {'max_depth': [10, 20, None],
+                     'min_samples_split': [2, 5, 10]}
+
+    svm_r_param_grid = {'C': [0.1, 1, 10],
+                        'gamma': ['scale', 'auto'],
+                        'kernel': ['linear', 'rbf']}
+
+    knn_r_param_grid = {'n_neighbors': [3, 5, 7],
+                        'weights': ['uniform', 'distance'],
+                        'algorithm': ['auto', 'ball_tree', 'kd_tree']}
+
+    # Initialize the classifiers and regressors
+    rf_clf = RandomForestClassifier(random_state=42)
+    svm_clf = svm.SVC(random_state=42)
+    knn_clf = KNeighborsClassifier()
+    nb_clf = GaussianNB()
+    ada_clf = AdaBoostClassifier(random_state=42)
+
+    lr_reg = LinearRegression()
+    dt_reg = DecisionTreeRegressor(random_state=42)
+    svm_reg = svm.SVR()
+    knn_reg = KNeighborsRegressor()
+
+    # Create a list of the classifiers and their parameter grids
+    classifiers = [('Random Forest', rf_clf, rf_param_grid),
+                   ('SVM', svm_clf, svm_param_grid),
+                   ('KNN', knn_clf, knn_param_grid),
+                   ('Naive Bayes', nb_clf, nb_param_grid),
+                   ('AdaBoost', ada_clf, ada_param_grid)]
+
+    # Create a list of the regressors and their parameter grids
+    regressors = [('Linear Regression', lr_reg, lr_param_grid),
+                  ('Decision Tree', dt_reg, dt_param_grid),
+                  ('SVM', svm_reg, svm_r_param_grid),
+                  ('KNN', knn_reg, knn_r_param_grid)]
+
+    # Loop through the classifiers and perform a grid search with cross-validation
+    for clf_name, clf, param_grid in classifiers:
+        grid_search = GridSearchCV(clf, param_grid, cv=5)
+        grid_search.fit(features, outcomes.ravel())
+        print(f'Best parameters for {clf_name}: {grid_search.best_params_}')
+
+    # Loop through the regressors and perform a grid search with cross-validation
 def SupportVectorMachineModel(features, outcomes, cpcs):
     # Define parameters for support vector machine classifier and regressor.
 
