@@ -6,3 +6,5 @@
 training_data/*
 test_data/*
 *.csv
+*.pyc
+*.sav

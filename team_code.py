@@ -114,7 +114,7 @@ def grid_search(features,outcomes, cpcs):
     imputer = SimpleImputer().fit(features)
 
     features = imputer.transform(features)
-    
+
     rf_param_grid = {'n_estimators': [50, 100, 200],
                      'max_depth': [10, 20, None],
                      'min_samples_split': [2, 5, 10]}
@@ -173,7 +173,7 @@ def grid_search(features,outcomes, cpcs):
 
     # Loop through the classifiers and perform a grid search with cross-validation
     for clf_name, clf, param_grid in classifiers:
-        grid_search = GridSearchCV(clf, param_grid, cv=5)
+        grid_search = GridSearchCV(clf, param_grid, cv=5, scoring='roc_auc')
         grid_search.fit(features, outcomes.ravel())
         print(f'Best parameters for {clf_name}: {grid_search.best_params_}')
 
