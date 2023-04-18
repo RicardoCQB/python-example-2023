@@ -12,20 +12,13 @@
 from helper_code import *
 import numpy as np, os, sys
 import mne
-from sklearn.model_selection import GridSearchCV
-from sklearn.impute import SimpleImputer
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, AdaBoostClassifier
-from sklearn import svm
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.linear_model import LinearRegression
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.neighbors import KNeighborsRegressor
-from sklearn.metrics import r2_score, mean_squared_error
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import r2_score
+from sklearn.impute import KNNImputer
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from scipy import signal
+from scipy.integrate import simps
 import joblib
-
+import pywt
+from collections import Counter
 
 ################################################################################
 #
@@ -82,23 +75,13 @@ def train_challenge_model(data_folder, model_folder, verbose):
     if verbose >= 1:
         print('Training the Challenge models on the Challenge data...')
 
-    imputer, outcome_model, cpc_model = SupportVectorMachineModel(features, outcomes, cpcs)
-
-    # Save the models.
-    #save_challenge_model(model_folder, imputer, outcome_model, cpc_model)
-
-    if verbose >= 1:
-        print('Done.')
-
-def RandomForestModel(features, outcomes, cpcs):
-
     # Define parameters for random forest classifier and regressor.
-    n_estimators   = 123  # Number of trees in the forest.
-    max_leaf_nodes = 456  # Maximum number of leaf nodes in each tree.
-    random_state   = 789  # Random state; set for reproducibility.
+    n_estimators   = 100  # Number of trees in the forest.
+    max_leaf_nodes = 25  # Maximum number of leaf nodes in each tree.
+    random_state   = 42  # Random state; set for reproducibility.
 
     # Impute any missing features; use the mean value by default.
-    imputer = SimpleImputer().fit(features)
+    imputer = KNNImputer().fit(features)
 
     # Train the models.
     features = imputer.transform(features)
@@ -107,95 +90,11 @@ def RandomForestModel(features, outcomes, cpcs):
     cpc_model = RandomForestRegressor(
         n_estimators=n_estimators, max_leaf_nodes=max_leaf_nodes, random_state=random_state).fit(features, cpcs.ravel())
 
-    return imputer, outcome_model, cpc_model
+    # Save the models.
+    save_challenge_model(model_folder, imputer, outcome_model, cpc_model)
 
-
-def grid_search(features,outcomes, cpcs):
-    imputer = SimpleImputer().fit(features)
-
-    features = imputer.transform(features)
-
-    rf_param_grid = {'n_estimators': [50, 100, 200],
-                     'max_depth': [10, 20, None],
-                     'min_samples_split': [2, 5, 10]}
-
-    svm_param_grid = {'C': [0.1, 1, 10],
-                      'gamma': ['scale', 'auto'],
-                      'kernel': ['linear', 'rbf']}
-
-    knn_param_grid = {'n_neighbors': [3, 5, 7],
-                      'weights': ['uniform', 'distance'],
-                      'algorithm': ['auto', 'ball_tree', 'kd_tree']}
-
-    nb_param_grid = {'var_smoothing': [1e-9, 1e-8, 1e-7]}
-
-    ada_param_grid = {'n_estimators': [50, 100, 200],
-                      'learning_rate': [0.1, 0.5, 1]}
-
-    # Define the parameter grid for each regression model
-    lr_param_grid = {}
-
-    dt_param_grid = {'max_depth': [10, 20, None],
-                     'min_samples_split': [2, 5, 10]}
-
-    svm_r_param_grid = {'C': [0.1, 1, 10],
-                        'gamma': ['scale', 'auto'],
-                        'kernel': ['linear', 'rbf']}
-
-    knn_r_param_grid = {'n_neighbors': [3, 5, 7],
-                        'weights': ['uniform', 'distance'],
-                        'algorithm': ['auto', 'ball_tree', 'kd_tree']}
-
-    # Initialize the classifiers and regressors
-    rf_clf = RandomForestClassifier(random_state=42)
-    svm_clf = svm.SVC(random_state=42)
-    knn_clf = KNeighborsClassifier()
-    nb_clf = GaussianNB()
-    ada_clf = AdaBoostClassifier(random_state=42)
-
-    lr_reg = LinearRegression()
-    dt_reg = DecisionTreeRegressor(random_state=42)
-    svm_reg = svm.SVR()
-    knn_reg = KNeighborsRegressor()
-
-    # Create a list of the classifiers and their parameter grids
-    classifiers = [('Random Forest', rf_clf, rf_param_grid),
-                   ('SVM', svm_clf, svm_param_grid),
-                   ('KNN', knn_clf, knn_param_grid),
-                   ('Naive Bayes', nb_clf, nb_param_grid),
-                   ('AdaBoost', ada_clf, ada_param_grid)]
-
-    # Create a list of the regressors and their parameter grids
-    regressors = [('Linear Regression', lr_reg, lr_param_grid),
-                  ('Decision Tree', dt_reg, dt_param_grid),
-                  ('SVM', svm_reg, svm_r_param_grid),
-                  ('KNN', knn_reg, knn_r_param_grid)]
-
-    # Loop through the classifiers and perform a grid search with cross-validation
-    for clf_name, clf, param_grid in classifiers:
-        grid_search = GridSearchCV(clf, param_grid, cv=5, scoring='roc_auc')
-        grid_search.fit(features, outcomes.ravel())
-        print(f'Best parameters for {clf_name}: {grid_search.best_params_}')
-
-    # Loop through the regressors and perform a grid search with cross-validation
-def SupportVectorMachineModel(features, outcomes, cpcs):
-    # Define parameters for support vector machine classifier and regressor.
-
-    # Impute any missing features; use the mean value by default.
-    imputer = SimpleImputer().fit(features)
-
-    # Train the models.
-    features = imputer.transform(features)
-    outcome_model = svm.SVC(C=1.0, gamma='scale', probability=True, kernel='rbf').fit(features, outcomes.ravel() )
-    cpc_model = svm.SVR(C=1.0, gamma='scale', kernel='rbf').fit(features, cpcs.ravel())
-
-    return imputer, outcome_model, cpc_model
-
-
-def CNNModel(features, outcomes, cpcs):
-    # Define parameters for CNN classifier and regressor.
-    ...
-
+    if verbose >= 1:
+        print('Done.')
 
 # Load your trained models. This function is *required*. You should edit this function to add your code, but do *not* change the
 # arguments of this function.
@@ -248,12 +147,11 @@ def get_features(patient_metadata, recording_metadata, recording_data):
     age = get_age(patient_metadata)
     sex = get_sex(patient_metadata)
     rosc = get_rosc(patient_metadata)
-    ohca = get_ohca(patient_metadata)
-    vfib = get_vfib(patient_metadata)
+    #ohca = get_ohca(patient_metadata)
+    #vfib = get_vfib(patient_metadata)
     ttm = get_ttm(patient_metadata)
 
     # Use one-hot encoding for sex; add more variables
-    sex_features = np.zeros(2, dtype=int)
     if sex == 'Female':
         female = 1
         male   = 0
@@ -266,63 +164,225 @@ def get_features(patient_metadata, recording_metadata, recording_data):
         female = 0
         male   = 0
         other  = 1
+        
+    if ttm == 33:
+        ttm_33 = 1
+        ttm_36   = 0
+        ttm_none  = 0
+    elif ttm == 36:
+        ttm_33 = 0
+        ttm_36   = 1
+        ttm_none  = 0
+    else:
+        ttm_33 = 0
+        ttm_36   = 0
+        ttm_none  = 1
 
     # Combine the patient features.
-    patient_features = np.array([age, female, male, other, rosc, ohca, vfib, ttm])
+    patient_features = np.array([age, female, male, other, rosc, ttm_33, ttm_36, ttm_none])
 
     # Extract features from the recording data and metadata.
     channels = ['Fp1-F7', 'F7-T3', 'T3-T5', 'T5-O1', 'Fp2-F8', 'F8-T4', 'T4-T6', 'T6-O2', 'Fp1-F3',
                 'F3-C3', 'C3-P3', 'P3-O1', 'Fp2-F4', 'F4-C4', 'C4-P4', 'P4-O2', 'Fz-Cz', 'Cz-Pz']
-    num_channels = len(channels)
-    num_recordings = len(recording_data)
+    num_channels = len(channels)        #channels - 18
+    num_recordings = len(recording_data) #hours - 72
 
     # Compute mean and standard deviation for each channel for each recording.
     available_signal_data = list()
+    mean_absolute_values_A = list()
+    mean_absolute_values_D4 = list()
+    mean_absolute_values_D3 = list()
+    mean_absolute_values_D2 = list()
+    mean_absolute_values_D1 = list()
+    average_power_A = list()
+    average_power_D4 = list()
+    average_power_D3 = list()
+    average_power_D2 = list()
+    average_power_D1 = list()
+    sd_A = list()
+    sd_D4 = list()
+    sd_D3 = list()
+    sd_D2 = list()
+    sd_D1 = list()
+    
+    MAEratio_D4_A = list()
+    MAEratio_D3_D4 = list()
+    MAEratio_D2_D3 = list()
+    MAEratio_D1_D2 = list()
+    
+    entropy_A=list()
+    entropy_D4=list()
+    entropy_D3=list()
+    entropy_D2=list()
+    entropy_D1=list()
+    #Get quality score
+    quality_score_array=np.zeros([num_recordings])
     for i in range(num_recordings):
-        signal_data, sampling_frequency, signal_channels = recording_data[i]
-        if signal_data is not None:
-            signal_data = reorder_recording_channels(signal_data, signal_channels, channels) # Reorder the channels in the signal data, as needed, for consistency across different recordings.
-            available_signal_data.append(signal_data)
+        quality_score_array[i]=get_quality_scores(recording_metadata)[i]
+    
+    good_quality_indexes=np.where(quality_score_array == np.nanmax(quality_score_array))
+    if bool(good_quality_indexes[0].any()):
+        for i in np.nditer(good_quality_indexes[0]):
+            signal_data, sampling_frequency, signal_channels = recording_data[i]
+            if signal_data is not None:
+                signal_data = reorder_recording_channels(signal_data, signal_channels, channels) # Reorder the channels in the signal data, as needed, for consistency across different recordings.
+                sos = signal.butter(6,[0.56, 40], 'bandpass', fs=100, output='sos')
+                signal_data = signal.sosfilt(sos, signal_data)
+                coeff=pywt.wavedec(signal_data,'db4',mode='symmetric',level=4,axis=1) #coeff[subfreq][channels]
+                
+                mean_abs_val_A=np.nanmean(abs(coeff[0]))
+                mean_abs_val_D4=np.nanmean(abs(coeff[1]))
+                mean_abs_val_D3=np.nanmean(abs(coeff[2]))
+                mean_abs_val_D2=np.nanmean(abs(coeff[3]))
+                mean_abs_val_D1=np.nanmean(abs(coeff[4]))
+                
+                ratio_MAE_D4_A=mean_abs_val_D4/mean_abs_val_A
+                ratio_MAE_D3_D4=mean_abs_val_D3/mean_abs_val_D4
+                ratio_MAE_D2_D3=mean_abs_val_D2/mean_abs_val_D3
+                ratio_MAE_D1_D2=mean_abs_val_D1/mean_abs_val_D2
+                
+                
+                mean_absolute_values_A.append(mean_abs_val_A)
+                mean_absolute_values_D4.append(mean_abs_val_D4)
+                mean_absolute_values_D3.append(mean_abs_val_D3)
+                mean_absolute_values_D2.append(mean_abs_val_D2)
+                mean_absolute_values_D1.append(mean_abs_val_D1)
+                
+                MAEratio_D4_A.append(ratio_MAE_D4_A)
+                MAEratio_D3_D4.append(ratio_MAE_D3_D4)
+                MAEratio_D2_D3.append(ratio_MAE_D2_D3)
+                MAEratio_D1_D2.append(ratio_MAE_D1_D2)
+                #available_signal_data.append(signal_data)
+                
+                standard_deviation_A = np.nanmean(np.nanstd(coeff[0],axis=1))
+                standard_deviation_D4 = np.nanmean(np.nanstd(coeff[1],axis=1))
+                standard_deviation_D3 = np.nanmean(np.nanstd(coeff[2],axis=1))
+                standard_deviation_D2 = np.nanmean(np.nanstd(coeff[3],axis=1))
+                standard_deviation_D1 = np.nanmean(np.nanstd(coeff[4],axis=1))
+                
+                sd_A.append(standard_deviation_A)
+                sd_D4.append(standard_deviation_D4)
+                sd_D3.append(standard_deviation_D3)
+                sd_D2.append(standard_deviation_D2)
+                sd_D1.append(standard_deviation_D1)
+                
+                freqs, psd = signal.welch(coeff[0][:][:], sampling_frequency/8)
+                avg_power_A=average_power(psd,freqs,num_channels)
+                freqs, psd = signal.welch(coeff[1][:][:], sampling_frequency/8)
+                avg_power_D4=average_power(psd,freqs,num_channels)
+                freqs, psd = signal.welch(coeff[2][:][:], sampling_frequency/4)
+                avg_power_D3=average_power(psd,freqs,num_channels)
+                freqs, psd = signal.welch(coeff[3][:][:], sampling_frequency/2)
+                avg_power_D2=average_power(psd,freqs,num_channels)
+                freqs, psd = signal.welch(coeff[4][:][:], sampling_frequency)
+                avg_power_D1=average_power(psd,freqs,num_channels)
+                
+                average_power_A.append(avg_power_A)
+                average_power_D4.append(avg_power_D4)
+                average_power_D3.append(avg_power_D3)
+                average_power_D2.append(avg_power_D2)
+                average_power_D1.append(avg_power_D1)
+                
+                entr_A=calculate_entropy(coeff[0],num_channels)
+                entr_D4=calculate_entropy(coeff[1],num_channels)
+                entr_D3=calculate_entropy(coeff[2],num_channels)
+                entr_D2=calculate_entropy(coeff[3],num_channels)
+                entr_D1=calculate_entropy(coeff[4],num_channels)
+                
+                entropy_A.append(entr_A)
+                entropy_D4.append(entr_D4)
+                entropy_D3.append(entr_D3)
+                entropy_D2.append(entr_D2)
+                entropy_D1.append(entr_D1)
 
-    if len(available_signal_data) > 0:
-        available_signal_data = np.hstack(available_signal_data)
-        signal_mean = np.nanmean(available_signal_data, axis=1)
-        signal_std  = np.nanstd(available_signal_data, axis=1)
-    else:
-        signal_mean = float('nan') * np.ones(num_channels)
-        signal_std  = float('nan') * np.ones(num_channels)
+        mean_absolute_values_A=np.nanmean(np.hstack(mean_absolute_values_A))
+        mean_absolute_values_D4=np.nanmean(np.hstack(mean_absolute_values_D4))
+        mean_absolute_values_D3=np.nanmean(np.hstack(mean_absolute_values_D3))
+        mean_absolute_values_D2=np.nanmean(np.hstack(mean_absolute_values_D2))
+        mean_absolute_values_D1=np.nanmean(np.hstack(mean_absolute_values_D1))
+        
+        MAEratio_D4_A=np.nanmean(np.hstack(MAEratio_D4_A))
+        MAEratio_D3_D4=np.nanmean(np.hstack(MAEratio_D3_D4))
+        MAEratio_D2_D3=np.nanmean(np.hstack(MAEratio_D2_D3))
+        MAEratio_D1_D2=np.nanmean(np.hstack(MAEratio_D1_D2))
+        
+        average_power_A=np.nanmean(np.hstack(average_power_A))
+        average_power_D4=np.nanmean(np.hstack(average_power_D4))
+        average_power_D3=np.nanmean(np.hstack(average_power_D3))
+        average_power_D2=np.nanmean(np.hstack(average_power_D2))
+        average_power_D1=np.nanmean(np.hstack(average_power_D1))
+        
+        sd_A=np.nanmean(np.hstack(sd_A))
+        sd_D4=np.nanmean(np.hstack(sd_D4))
+        sd_D3=np.nanmean(np.hstack(sd_D3))
+        sd_D2=np.nanmean(np.hstack(sd_D2))
+        sd_D1=np.nanmean(np.hstack(sd_D1))
+        
+        entropy_A=np.nanmean(np.hstack(entropy_A))
+        entropy_D4=np.nanmean(np.hstack(entropy_D4))
+        entropy_D3=np.nanmean(np.hstack(entropy_D3))
+        entropy_D2=np.nanmean(np.hstack(entropy_D2))
+        entropy_D1=np.nanmean(np.hstack(entropy_D1))
+    # if len(available_signal_data) > 0:
+    #     available_signal_data = np.hstack(available_signal_data)
+    #     signal_mean = np.nanmean(available_signal_data, axis=1)
+    #     signal_std  = np.nanstd(available_signal_data, axis=1)
+    # else:
+    #     signal_mean = float('nan') * np.ones(num_channels)
+    #     signal_std  = float('nan') * np.ones(num_channels)
 
     # Compute the power spectral density for the delta, theta, alpha, and beta frequency bands for each channel of the most
     # recent recording.
-    index = None
-    for i in reversed(range(num_recordings)):
-        signal_data, sampling_frequency, signal_channels = recording_data[i]
-        if signal_data is not None:
-            index = i
-            break
+    # index = None
+    # quality_reversed=good_quality_indexes[0][::-1]
+    # for i in np.nditer(good_quality_indexes[0]):
+    #     signal_data, sampling_frequency, signal_channels = recording_data[i]
+    #     if signal_data is not None:
+    #         index = i
+    #         break
 
-    if index is not None:
-        signal_data, sampling_frequency, signal_channels = recording_data[index]
-        signal_data = reorder_recording_channels(signal_data, signal_channels, channels) # Reorder the channels in the signal data, as needed, for consistency across different recordings.
+    # if index is not None:
+    #     signal_data, sampling_frequency, signal_channels = recording_data[index]
+    #     signal_data = reorder_recording_channels(signal_data, signal_channels, channels) # Reorder the channels in the signal data, as needed, for consistency across different recordings.
 
-        delta_psd, _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency,  fmin=0.5,  fmax=8.0, verbose=False)
-        theta_psd, _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency,  fmin=4.0,  fmax=8.0, verbose=False)
-        alpha_psd, _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency,  fmin=8.0, fmax=12.0, verbose=False)
-        beta_psd,  _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency, fmin=12.0, fmax=30.0, verbose=False)
+    #     delta_psd, _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency,  fmin=0.5,  fmax=4.0, verbose=False)
+    #     theta_psd, _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency,  fmin=4.0,  fmax=8.0, verbose=False)
+    #     alpha_psd, _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency,  fmin=8.0, fmax=12.0, verbose=False)
+    #     beta_psd,  _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency, fmin=12.0, fmax=30.0, verbose=False)
 
-        delta_psd_mean = np.nanmean(delta_psd, axis=1)
-        theta_psd_mean = np.nanmean(theta_psd, axis=1)
-        alpha_psd_mean = np.nanmean(alpha_psd, axis=1)
-        beta_psd_mean  = np.nanmean(beta_psd,  axis=1)
+    #     delta_psd_mean = np.nanmean(delta_psd, axis=1)
+    #     theta_psd_mean = np.nanmean(theta_psd, axis=1)
+    #     alpha_psd_mean = np.nanmean(alpha_psd, axis=1)
+    #     beta_psd_mean  = np.nanmean(beta_psd,  axis=1)
 
-        quality_score = get_quality_scores(recording_metadata)[index]
+    #     quality_score = get_quality_scores(recording_metadata)[index]
+    # else:
+    #     delta_psd_mean = theta_psd_mean = alpha_psd_mean = beta_psd_mean = float('nan') * np.ones(num_channels)
+    #     quality_score = float('nan')
+
+        recording_features = np.hstack((mean_absolute_values_A,mean_absolute_values_D4,mean_absolute_values_D3,mean_absolute_values_D2,mean_absolute_values_D1,average_power_A,average_power_D4,average_power_D3,average_power_D2,average_power_D1,sd_A,sd_D4,sd_D3,sd_D2,sd_D1,MAEratio_D4_A,MAEratio_D3_D4,MAEratio_D2_D3,MAEratio_D1_D2,entropy_A,entropy_D4,entropy_D3,entropy_D2,entropy_D1))#signal_mean, signal_std, delta_psd_mean, theta_psd_mean, alpha_psd_mean, beta_psd_mean, quality_score))
+
     else:
-        delta_psd_mean = theta_psd_mean = alpha_psd_mean = beta_psd_mean = float('nan') * np.ones(num_channels)
-        quality_score = float('nan')
-
-    recording_features = np.hstack((signal_mean, signal_std, delta_psd_mean, theta_psd_mean, alpha_psd_mean, beta_psd_mean, quality_score))
-
+        recording_features=np.empty(24)
+        recording_features[:]=np.nan
+        
     # Combine the features from the patient metadata and the recording data and metadata.
     features = np.hstack((patient_features, recording_features))
-
     return features
+
+#Function to compute power
+def average_power(psd,freqs,num_channels):
+    avg_power=np.zeros(num_channels)
+    for channel in range(num_channels):
+        avg_power[channel] = simps(psd[channel,:], dx=freqs[1] - freqs[0])
+    avg_power=np.nanmean(avg_power)    
+    return avg_power
+
+def calculate_entropy(list_values,num_channels):
+    entropy=np.zeros(num_channels)
+    for channel in range(num_channels):
+        counter_values = Counter(np.around(list_values[channel,:])).most_common()
+        probabilities = [elem[1]/len(list_values) for elem in counter_values]
+        entropy[channel]=scipy.stats.entropy(probabilities)
+    entropy=np.nanmean(entropy)
+    return entropy

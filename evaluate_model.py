@@ -287,14 +287,7 @@ def compute_mae(labels, outputs):
 
 if __name__ == '__main__':
     # Compute the scores for the model outputs.
-
-    labels = 'test_data'
-    outputs = 'test_outputs'
-    scoresCSV = 'scoresSVM.csv'
-    scores = evaluate_model(labels, outputs)
-
-    #scores = evaluate_model(sys.argv[1], sys.argv[2])
-
+    scores = evaluate_model(sys.argv[1], sys.argv[2])
 
     # Unpack the scores.
     challenge_score, auroc_outcomes, auprc_outcomes, accuracy_outcomes, f_measure_outcomes, mse_cpcs, mae_cpcs = scores
@@ -310,11 +303,8 @@ if __name__ == '__main__':
         'CPC MAE: {:.3f}\n'.format(mae_cpcs)
 
     # Output the scores to screen and/or a file.
-    with open(scoresCSV, 'w') as f:
-        f.write(output_string)
-
-    # if len(sys.argv) == 3:
-    #     print(output_string)
-    # elif len(sys.argv) == 4:
-    #     with open(sys.argv[3], 'w') as f:
-    #         f.write(output_string)
+    if len(sys.argv) == 3:
+        print(output_string)
+    elif len(sys.argv) == 4:
+        with open(sys.argv[3], 'w') as f:
+            f.write(output_string)
