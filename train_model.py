@@ -14,21 +14,19 @@ from team_code_cristian_2023_04_17 import train_challenge_model
 
 if __name__ == '__main__':
     # Parse the arguments.
-    # if not (len(sys.argv) == 3 or len(sys.argv) == 4):
-    #     raise Exception('Include the data and model folders as arguments, e.g., python train_model.py data model.')
+    if not (len(sys.argv) == 3 or len(sys.argv) == 4):
+        raise Exception('Include the data and model folders as arguments, e.g., python train_model.py data model.')
 
     # Define the data and model foldes.
-    # data_folder = sys.argv[1]
-    # model_folder = sys.argv[2]
+    data_folder = sys.argv[1]
+    model_folder = sys.argv[2]
 
-    data_folder = 'training_data'
-    model_folder = 'model'
-    verbose = 2
+
 
     # Change the level of verbosity; helpful for debugging.
-    # if len(sys.argv)==4 and is_integer(sys.argv[3]):
-    #     verbose = int(sys.argv[3])
-    # else:
-    #     verbose = 1
+    if len(sys.argv)==4 and is_integer(sys.argv[3]):
+        verbose = int(sys.argv[3])
+    else:
+        verbose = 1
 
     train_challenge_model(data_folder, model_folder, verbose) ### Teams: Implement this function!!!
