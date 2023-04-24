@@ -15,27 +15,14 @@ import mne
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 import joblib
-import math
-import pandas as pd
+from mne_connectivity import spectral_connectivity_time
+from sklearn.linear_model import ElasticNetCV
+from sklearn.datasets import make_regression
+import numpy as np
 import matplotlib.pyplot as plt
-from scipy.signal import coherence, hann
 from scipy import signal
-from sklearn.feature_selection import mutual_info_classif
-from sklearn.preprocessing import StandardScaler
-import seaborn as sns
-from sklearn.impute import KNNImputer
-import joblib
-import pywt
-from scipy.integrate import simps
 from collections import Counter
-
-# from scipy.stats import entropy
-
-################################################################################
-#
-# Required functions. Edit these functions to add your code, but do not change the arguments of the functions.
-#
-################################################################################
+import math
 
 # Train your model.
 def train_challenge_model(data_folder, model_folder, verbose):
@@ -59,6 +46,12 @@ def train_challenge_model(data_folder, model_folder, verbose):
     features = list()
     outcomes = list()
     cpcs = list()
+    available_timepoints = list()
+    conn_features=list()
+    recording_features=list()
+    clinical_record=list()
+    channels = ['Fp1-F7', 'F7-T3', 'T3-T5', 'T5-O1', 'Fp2-F8', 'F8-T4', 'T4-T6', 'T6-O2', 'Fp1-F3',
+            'F3-C3', 'C3-P3', 'P3-O1', 'Fp2-F4', 'F4-C4', 'C4-P4', 'P4-O2', 'Fz-Cz', 'Cz-Pz']
 
     for i in range(num_patients):
         if verbose >= 2:
@@ -68,45 +61,86 @@ def train_challenge_model(data_folder, model_folder, verbose):
         patient_id = patient_ids[i]
         patient_metadata, recording_metadata, recording_data = load_challenge_data(data_folder, patient_id)
 
-        # # Extract features.
-        current_features = get_features(patient_metadata, recording_metadata, recording_data)
-        features.append(current_features)
+        # Extract features from the recording data and metadata.
+        num_channels = len(channels)
+        num_recordings = len(recording_data)
+        train_or_test='train'
+
+        # Extract available and non-zero signal data
+        available_signal_data, available_timepoints, sampling_frequency=get_signal_data(num_channels, num_recordings, channels,
+                                                                                        recording_metadata, recording_data, train_or_test)
+        if not available_signal_data: # If list is empty - didn't find any signal that met conditions, just skip this subject
+            continue 
+            
+        # Directly selection last available timepoint
+        #last_available_timepoint=available_times[-1]
+        #signal_data, sampling_frequency, signal_channels = recording_data[last_available_timepoint]
+        #last_available_signal=reorder_recording_channels(signal_data, signal_channels, channels)
+        
+        # Function to select specific timepoints # 12h, 24h, 48, 72h...
+        # Now is selecting last available: closest to 72h
+        last_available_signal, t_last = select_time_points(available_signal_data, available_timepoints)
+        
+        # Compute Patient Features
+        clinical_feat=patient_features(patient_metadata)
+        clinical_record.append(clinical_feat)
+        
+        # Compute Coherence 
+        mean_coh_total, mean_coh_by_channel,mean_ciplv, mean_ciplv_by_channel, entropy=connectivity_features(last_available_signal)
+        mean_coh_by_channel=np.hstack(mean_coh_by_channel) # from (6,18,1) features to (108,1) features
+        
+        mean_ciplv_by_channel=np.stack(mean_ciplv_by_channel)
+        entropy=np.stack(entropy)
+        
+        conn_features.append(np.concatenate((mean_coh_total, mean_coh_by_channel,mean_ciplv, mean_ciplv_by_channel, entropy)))
+        
+        # Compute Signal Features
+        signal_feat=signal_features(recording_metadata, available_signal_data, last_available_signal, 
+                                       t_last, num_channels, sampling_frequency)
+        recording_features.append(signal_feat)
+
 
         # Extract labels.
         current_outcome = get_outcome(patient_metadata)
         outcomes.append(current_outcome)
         current_cpc = get_cpc(patient_metadata)
         cpcs.append(current_cpc)
-        
-    features = np.vstack(features)
+
+    recording_features=np.stack(recording_features)
+    conn_features=np.stack(conn_features)
+    clinical_record=np.stack(clinical_record)
+    
+    features=np.hstack((clinical_record,recording_features, conn_features))
     outcomes = np.vstack(outcomes)
     cpcs = np.vstack(cpcs)
-  
+    
+    # Impute any missing features; use the mean value by default.
+    imputer = SimpleImputer().fit(features)
+
+    # Train the models.
+    features = imputer.transform(features)
+    
+    
+    selected_features_mask=feature_selection(features, cpcs, cv=5, l1_ratio=0.6)
+    
+    features=features[:,selected_features_mask]
 
     # Train the models.
     if verbose >= 1:
         print('Training the Challenge models on the Challenge data...')
 
     # Define parameters for random forest classifier and regressor.
-    n_estimators   = 1000  # Number of trees in the forest. 1000
-    max_leaf_nodes = 25  # Maximum number of leaf nodes in each tree.25
-    random_state   = 42  # Random state; set for reproducibility.
-    
-    # Impute any missing features; use the mean value by default.
-    # imputer2 = SimpleImputer().fit(features)
-    imputer2 = KNNImputer().fit(features)
-    # Save imputer
-    joblib.dump(imputer2, "imputer2.pkl")
+    n_estimators   = 1000  # Number of trees in the forest.
+    max_leaf_nodes = 25  # Maximum number of leaf nodes in each tree.
+    random_state   = 789  # Random state; set for reproducibility.
 
-    # Train the models.
-    features = imputer2.transform(features)
     outcome_model = RandomForestClassifier(
         n_estimators=n_estimators, max_leaf_nodes=max_leaf_nodes, random_state=random_state).fit(features, outcomes.ravel())
     cpc_model = RandomForestRegressor(
         n_estimators=n_estimators, max_leaf_nodes=max_leaf_nodes, random_state=random_state).fit(features, cpcs.ravel())
 
     # Save the models.
-    save_challenge_model(model_folder, imputer2, outcome_model, cpc_model)
+    save_challenge_model(model_folder, imputer, selected_features_mask, outcome_model, cpc_model)
 
     if verbose >= 1:
         print('Done.')
@@ -121,6 +155,7 @@ def load_challenge_models(model_folder, verbose):
 # arguments of this function.
 def run_challenge_models(models, data_folder, patient_id, verbose):
     imputer = models['imputer']
+    selected_features_mask=models['features_mask']
     outcome_model = models['outcome_model']
     cpc_model = models['cpc_model']
 
@@ -128,11 +163,45 @@ def run_challenge_models(models, data_folder, patient_id, verbose):
     patient_metadata, recording_metadata, recording_data = load_challenge_data(data_folder, patient_id)
 
     # Extract features.
-    features = get_features(patient_metadata, recording_metadata, recording_data)    
-    # Convert the feature list to a NumPy array
-    features = features.reshape(-1, 1) 
-    features = features.T
+    # CHANGE HERE!
+    
+    # Extract features from the recording data and metadata.
+    channels = ['Fp1-F7', 'F7-T3', 'T3-T5', 'T5-O1', 'Fp2-F8', 'F8-T4', 'T4-T6', 'T6-O2', 'Fp1-F3',
+                'F3-C3', 'C3-P3', 'P3-O1', 'Fp2-F4', 'F4-C4', 'C4-P4', 'P4-O2', 'Fz-Cz', 'Cz-Pz']
+    num_channels = len(channels)
+    num_recordings = len(recording_data)
+    train_or_test='test'
+    #train_or_test='train'
+    
+    # Extract available and non-zero signal data
+    available_signal_data, available_timepoints, sampling_frequency=get_signal_data(num_channels, 
+                                                                                    num_recordings, channels, recording_metadata, 
+                                                                                    recording_data, train_or_test)
+    # Directly selection last available timepoint
+    #last_available_timepoint=available_times[-1]
+    #signal_data, sampling_frequency, signal_channels = recording_data[last_available_timepoint]
+    #last_available_signal=reorder_recording_channels(signal_data, signal_channels, channels)
+        
+    # Function to select specific timepoints # 12h, 24h, 48, 72h...
+    # Now is selecting last available: closest to 72h
+    last_available_signal, t_last = select_time_points(available_signal_data, available_timepoints)
+        
+    # Compute Patient Features
+    clinical_feat=patient_features(patient_metadata)
+        
+    # Compute Coherence 
+    mean_coh_total, mean_coh_by_channel, entropy=connectivity_features(last_available_signal)
+    print(entropy.shape)
+    mean_coh_by_channel=np.hstack(mean_coh_by_channel) # from (6,18,1) features to (108,1) features
 
+        
+    # Compute Signal Features
+    signal_feat=signal_features(recording_metadata, available_signal_data, last_available_signal, 
+                                       t_last, num_channels, sampling_frequency)
+
+    features=np.hstack((clinical_feat,signal_feat,mean_coh_total, mean_coh_by_channel)).reshape(1, -1)
+    
+    # Impute missing data.
     features = imputer.transform(features)
 
     # Apply models to features.
@@ -152,11 +221,96 @@ def run_challenge_models(models, data_folder, patient_id, verbose):
 ################################################################################
 
 # Save your trained model.
-def save_challenge_model(model_folder, imputer, outcome_model, cpc_model):
-    d = {'imputer': imputer, 'outcome_model': outcome_model, 'cpc_model': cpc_model}
+def save_challenge_model(model_folder, imputer, selected_features_mask,outcome_model, cpc_model):
+    d = {'imputer': imputer, 'features_mask':selected_features_mask,'outcome_model': outcome_model, 'cpc_model': cpc_model}
     filename = os.path.join(model_folder, 'models.sav')
     joblib.dump(d, filename, protocol=0)
+
+def feature_selection(X, y, cv, l1_ratio):
     
+    # Create ElasticNetCV model with 5-fold cross-validation
+    model = ElasticNetCV(l1_ratio=l1_ratio, cv=cv, random_state=42, verbose=10) #0 corresponds to L2 regularization (ridge regression) and 1 corresponds to L1 regularization (lasso regression). 
+    # Fit the model to the data
+    model.fit(X, y)
+    # Print the selected features
+    selected_features = model.coef_ != 0
+    print("Selected features:", selected_features)
+
+    return selected_features
+
+def get_signal_data(num_channels, num_recordings, channels, recording_metadata, recording_data, train_or_test):
+    
+    available_signal_data = list()
+    available_timepoints = list()
+    
+    available_times=[i for i,tup in enumerate(recording_data) if all(elem is not None for elem in tup)]
+    for i in available_times:
+        signal_data, sampling_frequency, signal_channels = recording_data[i]
+        
+        if train_or_test=='train':
+            quality_score = get_quality_scores(recording_metadata)[i] # quality score of last available
+            
+            if (signal_data is not None) & (np.sum(signal_data)!=0) & (quality_score>0.5):
+                signal_data = reorder_recording_channels(signal_data, signal_channels, channels) # Reorder the channels in the signal data, as needed, for consistency across different recordings.
+                available_signal_data.append(signal_data)
+                available_timepoints.append(i)
+        
+        elif train_or_test=='test':
+            if (signal_data is not None) & (np.sum(signal_data)!=0):
+                signal_data = reorder_recording_channels(signal_data, signal_channels, channels) # Reorder the channels in the signal data, as needed, for consistency across different recordings.
+                available_signal_data.append(signal_data)
+                available_timepoints.append(i)
+            
+    return available_signal_data, available_timepoints, sampling_frequency
+
+    
+def select_time_points(available_signal_data, available_time_point):
+    """
+    # Check what is the maximum time_point available for the recordings
+    
+    max_hour_recorded=np.argmax(np.array(available_time_point))
+    
+    if max_hour_recorded > 48: # we can have a time point corresponding to the 3rd day
+        # we can define all time_points
+        
+    elif max_hour_recorded>24: # The last available time point is not bigger than 48h but we know that there is at least hour 25th - second day
+        # we can define time_point 12h, 24h, 48h, and set 72h to zero(?)
+        
+    elif max_hour_recorded>12: # the last available time point is not after 24h, but there is signal during the second half of first day
+        # we can define the 12h and 24h, - set 48h and 72h to zero or nan (?)
+    
+    elif max_hour_recorded<12: # the last available time point only allows to have signal during the first half of the first day
+        # we define the 12h - set, 24h, 48h, and 72h to (?)
+    """
+    # I select the available at 12h, 24h, 48h, 72h
+    
+    # TO DO - IF IT'S NOT ZERO
+    
+    #t_12=np.argmin(np.abs(np.array(available_time_point)-12))
+    #t_24=np.argmin(np.abs(np.array(available_time_point)-24))
+    #t_48=np.argmin(np.abs(np.array(available_time_point)-48))
+    t_72=np.argmin(np.abs(np.array(available_time_point)-72)) # The last available point
+    
+    #Check is the time_points are different from each other
+    
+    four_signal_data=list()
+    #four_signal_data.append(available_signal_data[t_12])
+    #four_signal_data.append(available_signal_data[t_24])
+    #four_signal_data.append(available_signal_data[t_48])
+    four_signal_data.append(available_signal_data[t_72])
+    
+    return np.stack(four_signal_data), t_72 # np.stack(four_signal_data) for (4, 18, 30000) for 1 subject here 
+
+# re-reference EEG?
+
+def calculate_entropy(list_values,num_channels):
+    entropy=np.zeros(num_channels)
+    for channel in range(num_channels):
+        counter_values = Counter(np.around(list_values[channel,:])).most_common()
+        probabilities = [elem[1]/len(list_values) for elem in counter_values]
+        entropy[channel]=scipy.stats.entropy(probabilities)
+    entropy=np.nanmean(entropy)
+    return entropy
 
 def compute_regularity(signal_data, sampling_frequency):
     
@@ -186,17 +340,145 @@ def compute_regularity(signal_data, sampling_frequency):
     
     return REG
 
-# Extract features from the data.
-def get_features(patient_metadata, recording_metadata, recording_data):
+def chebyshev_filter(data,lowcut,highcut):
+    # Define filter parameters
+    fs = 100     # Sampling frequency (Hz)
+    order = 1024 # Filter order
+    
+    # Calculate the filter coefficients
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
+    b = signal.firwin(order, [low, high], pass_zero=False, window=('chebwin', 100))
+    filtered_data = np.zeros_like(data)
+    for i in range(data.shape[0]):
+        filtered_data[i,:] = signal.lfilter(b, 1, data[i,:])
+    return filtered_data
+
+def ciCOH(x, y, fs):
+    """
+    Calculate the corrected imaginary coherence (ciCOH) between two EEG signals.
+
+    Parameters:
+    -----------
+    x, y : 1D arrays
+        EEG signals for two channels
+    fs : float
+        Sampling frequency of the signals
+    nperseg : int, optional
+        Length of each segment used to compute the PSD and CSD (default: 256)
+        to be added if needed
+
+    Returns:
+    --------
+    icoh : 1D array
+        The ICOH values for each frequency bin
+    """
+    # Calculate the PSD and CSD using Welch's method
+    f, Pxx = signal.welch(x, fs=fs)
+    f, Pyy = signal.welch(y, fs=fs)
+    f, Pxy = signal.csd(x, y, fs=fs)
+
+    # Calculate the ICOH
+    ciCOH = np.imag(Pxy) / np.sqrt(Pxx*Pyy - np.real(Pxy)**2)
+
+    return ciCOH
+
+def connectivity_features(four_signal_data):
+    #PLV Theta CZ, PLV theta T3, PLV alpha Fp2, ciCOH Beta CZ, PLV Delta F3
+    # ciCoh PLV
+    eeg_filter_bands=list()
+    mean_coh=list()
+    mean_coh_by_channel=list()
+    mean_ciplv_by_channel=list()
+    mean_ciplv=list()
+    entropy=list()
+    
+    filter_params ={'delta': (1, 4),'theta': (4, 8),'alpha': (8, 12),'beta1': (12, 18),'beta2': (18, 25),'gamma': (25, 45)}
+    
+    for i, signal in enumerate(four_signal_data):
+        # Time point i
+        
+        for band_name, (low, high) in filter_params.items(): # 6 frequency bands for 4 Time points (18, 30000)
+            
+            signal = np.array(signal, dtype=np.float64) 
+            
+            signal_band=chebyshev_filter(signal, low, high)
+            
+            #signal_band=mne.filter.filter_data(signal, 100, low, high, method='fir', 
+            #                                  fir_design='firwin', filter_length='auto', phase='zero-double', verbose=False)
+            
+            #from scipy import signal
+            #sos = signal.butter(6,[0.56, 40], 'bandpass', fs=100, output='sos')
+            #signal_data = signal.sosfilt(sos, signal_data)
+            
+            #fir_window='chebyshev'
+            #signal_band=mne.filter.filter_data(signal, sfreq=100, l_freq=low, h_freq=high, method='fir', l_trans_bandwidth='auto', h_trans_bandwidth='auto', filter_length=1025)
+            
+            #eeg_filter_bands.append(mne.filter.filter_data(signal, sfreq=100, l_freq=low, h_freq=high, method='fir',fir_window='chebyshev', l_trans_bandwidth='auto', h_trans_bandwidth='auto', filter_length=1025))
+            
+            # Signal is (18, 30000) filter for freq_band
+            ten_segments=np.stack(np.split(signal_band, 30, axis=-1)) # (30, 18, 1000)
+            freqs=np.array([low, high])
+            n_cycles=freqs / 2
+            con_coh=spectral_connectivity_time(ten_segments[1:-2], freqs=freqs, method='coh', average=True, indices=None, sfreq=100,
+                                           fmin=low, fmax=high, fskip=0, faverage=True, 
+                                           sm_times=0, sm_freqs=1,sm_kernel='hanning', padding=0, mode='cwt_morlet', 
+                                           mt_bandwidth=None,n_cycles=n_cycles, decim=1, n_jobs=1, verbose=None)
+            
+            # Get a symmetric connectivity matrix
+            
+            #con.get_data(output="dense")[:,:,1].T (18,18,n_freq)
+            
+            con_matrix=con_coh.get_data().reshape(18,18).T # [:,1]-> where axis 1 is n_frequency bands; each row is channel i -> all others (1,2,3,...)
+            #print(con_matrix)
+            r,c=np.tril_indices(18, -1) # the lower triangle index
+            con_matrix[r,c]= con_matrix.T[r,c] # copy the upper triangle to the lower triangle into a symmetric matrix
+            
+            # Average COH by channel
+            mean_coh_by_channel.append(np.nanmean(np.where(con_matrix!=0,con_matrix,np.nan),axis=0)) # Do the mean over channel ignoring diagonal
+            mean_coh.append(np.nanmean(np.where(con_matrix!=0,con_matrix,np.nan))) # Total mean connectivity for 5min epoch for freqband for timepoint ?
+            
+            
+            con_ciplv=spectral_connectivity_time(ten_segments[1:-2], freqs=freqs, method='ciplv', average=True, indices=None, sfreq=100,
+                                           fmin=low, fmax=high, fskip=0, faverage=True, 
+                                           sm_times=0, sm_freqs=1,sm_kernel='hanning', padding=0, mode='cwt_morlet', 
+                                           mt_bandwidth=None,n_cycles=n_cycles, decim=1, n_jobs=1, verbose=None)
+            
+            con_ciplv=con_ciplv.get_data().reshape(18,18).T # [:,1]-> where axis 1 is n_frequency bands; each row is channel i -> all others (1,2,3,...)
+            r,c=np.tril_indices(18, -1) # the lower triangle index
+            con_ciplv[r,c]= con_ciplv.T[r,c] # copy
+        
+            
+            # Average ciPLV by channel
+            mean_ciplv_by_channel.append(np.nanmean(np.where(con_ciplv!=0,con_ciplv,np.nan),axis=0)) # Do the mean over channel ignoring diagonal
+            mean_ciplv.append(np.nanmean(np.where(con_ciplv!=0,con_ciplv,np.nan))) # Total mean connectivity for 5min epoch for freqband for timepoint ?
+            print(len(mean_ciplv_by_channel))
+            # Calculate entropy per freq. band
+            entr=calculate_entropy(signal_band,num_channels)
+            entropy.append(entr) # (6 entropy values ?)
+        
+        
+        mean_coh=np.stack(mean_coh) #(x,6,1)
+        mean_coh_by_channel=np.stack(mean_coh_by_channel) #(6, 18, 1)
+        mean_ciplv=np.stack(mean_ciplv)
+        mean_ciplv_by_channel=np.stack(mean_ciplv_by_channel)
+        
+        print(mean_ciplv_by_channel.shape) # shape is (6, 18)
+        
+    return mean_coh, mean_coh_by_channel,mean_ciplv, mean_ciplv_by_channel, entropy #mean_coh[0], mean_coh[1], mean_conh[2], mean_coh[3], mean_coh[4], mean_coh[5]
+
+def patient_features(patient_metadata):
     # Extract features from the patient metadata.
     age = get_age(patient_metadata)
     sex = get_sex(patient_metadata)
     rosc = get_rosc(patient_metadata)
-    #ohca = get_ohca(patient_metadata)
-    #vfib = get_vfib(patient_metadata)
+    ohca = get_ohca(patient_metadata)
+    vfib = get_vfib(patient_metadata)
     ttm = get_ttm(patient_metadata)
 
     # Use one-hot encoding for sex; add more variables
+    sex_features = np.zeros(2, dtype=int)
     if sex == 'Female':
         female = 1
         male   = 0
@@ -224,286 +506,45 @@ def get_features(patient_metadata, recording_metadata, recording_data):
         ttm_none  = 1
 
     # Combine the patient features.
-    patient_features = np.array([age, female, male, other, rosc, ttm_33, ttm_36, ttm_none])
+    patient_features = np.array([age, female, male, other, rosc, ttm_33, ttm_36, ttm_none]) #age, female, male, other, rosc, ohca, vfib, ttm
+    
+    return patient_features
 
-    # Extract features from the recording data and metadata.
-    channels = ['Fp1-F7', 'F7-T3', 'T3-T5', 'T5-O1', 'Fp2-F8', 'F8-T4', 'T4-T6', 'T6-O2', 'Fp1-F3',
-                'F3-C3', 'C3-P3', 'P3-O1', 'Fp2-F4', 'F4-C4', 'C4-P4', 'P4-O2', 'Fz-Cz', 'Cz-Pz']
-    num_channels = len(channels)
-    num_recordings = len(recording_data)
+# Extract features from the data.
+def signal_features(recording_metadata, available_signal_data, last_available_signal, t_last, num_channels, sampling_frequency):
     
-    # Compute mean and standard deviation for each channel for each recording.
-    available_signal_data = list()
-    mean_absolute_values_A = list()
-    mean_absolute_values_D4 = list()
-    mean_absolute_values_D3 = list()
-    mean_absolute_values_D2 = list()
-    mean_absolute_values_D1 = list()
-    average_power_A = list()
-    average_power_D4 = list()
-    average_power_D3 = list()
-    average_power_D2 = list()
-    average_power_D1 = list()
-    sd_A = list()
-    sd_D4 = list()
-    sd_D3 = list()
-    sd_D2 = list()
-    sd_D1 = list()
-    
-    MAEratio_D4_A = list()
-    MAEratio_D3_D4 = list()
-    MAEratio_D2_D3 = list()
-    MAEratio_D1_D2 = list()
-    
-    entropy_A=list()
-    entropy_D4=list()
-    entropy_D3=list()
-    entropy_D2=list()
-    entropy_D1=list()
-
-    # Compute mean and standard deviation for each channel for each recording.
-    available_signal_data = list()
-    for i in range(num_recordings):
-        signal_data, sampling_frequency, signal_channels = recording_data[i]
-        if signal_data is not None:
-            signal_data = reorder_recording_channels(signal_data, signal_channels, channels) # Reorder the channels in the signal data, as needed, for consistency across different recordings.
-            available_signal_data.append(signal_data)
 
     if len(available_signal_data) > 0:
-        available_signal_data = np.hstack(available_signal_data)
+        available_signal_data = np.hstack(available_signal_data) # It concatenates all 5min epochs 
         signal_mean = np.nanmean(available_signal_data, axis=1)
-        signal_std  = np.nanstd(available_signal_data, axis=1)
-        signal_power = np.square(signal_std)
+        signal_std  = np.nanstd(available_signal_data, axis=1)      
     else:
+        print('Patient {} has no available data '.format(patient_id))
         signal_mean = float('nan') * np.ones(num_channels)
         signal_std  = float('nan') * np.ones(num_channels)
-        signal_power  = float('nan') * np.ones(num_channels)
+        
+    last_available_signal=np.hstack(last_available_signal) # (from (1,18,30000) -> (18, 300000))
+    delta_psd, _ = mne.time_frequency.psd_array_welch(last_available_signal, sfreq=sampling_frequency,  fmin=0.5,  fmax=4.0, verbose=False)
+    theta_psd, _ = mne.time_frequency.psd_array_welch(last_available_signal, sfreq=sampling_frequency,  fmin=4.0,  fmax=8.0, verbose=False)
+    alpha_psd, _ = mne.time_frequency.psd_array_welch(last_available_signal, sfreq=sampling_frequency,  fmin=8.0, fmax=12.0, verbose=False)
+    beta_psd,  _ = mne.time_frequency.psd_array_welch(last_available_signal, sfreq=sampling_frequency, fmin=12.0, fmax=30.0, verbose=False)
 
-     # Compute the power spectral density for the delta, theta, alpha, and beta frequency bands for each channel of the most
-     # recent recording with quality score between 0 and 1.
-    index = None
-     
-    found_index = False
-    for i in reversed(range(num_recordings)):
-        signal_data, sampling_frequency, signal_channels = recording_data[i]
-        if signal_data is not None:
-            quality_score = get_quality_scores(recording_metadata)[i]
-            if quality_score > 0.0 and quality_score <=1:
-                index = i
-                found_index = True
-                break
+    delta_psd_mean = np.nanmean(delta_psd, axis=1)
+    theta_psd_mean = np.nanmean(theta_psd, axis=1)
+    alpha_psd_mean = np.nanmean(alpha_psd, axis=1)
+    beta_psd_mean  = np.nanmean(beta_psd,  axis=1)
+
+    quality_score = get_quality_scores(recording_metadata)[t_last] # quality score of last available
     
+    # Compute regularity for each channel 
+    reg_chan = np.zeros(num_channels)
+    for j in range(num_channels):
+        reg_chan[j] = compute_regularity(last_available_signal[j,:], sampling_frequency) #array(18,1) #signal data is (18,30000)
+        
+    print(reg_chan)
+    print(reg_chan.shape)
+    # For get_features function it needs to output the features for 1 patient at a time
 
-    if index is not None:
-        signal_data, sampling_frequency, signal_channels = recording_data[index]
-        signal_data = reorder_recording_channels(signal_data, signal_channels, channels) # Reorder the channels in the signal data, as needed, for consistency across different recordings.
-        
-        delta_psd, _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency,  fmin=0.5,  fmax=4.0, verbose=False) #array (18,9)
-        theta_psd, _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency,  fmin=4.0,  fmax=8.0, verbose=False) #array (18,10)
-        alpha_psd, _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency,  fmin=8.0, fmax=12.0, verbose=False) #array (18,10)
-        beta_psd,  _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency, fmin=12.0, fmax=30.0, verbose=False) #array (18,46)
-        
-        delta_psd_mean = np.nanmean(delta_psd, axis=1) #mean per channel, array(18,1)
-        theta_psd_mean = np.nanmean(theta_psd, axis=1)
-        alpha_psd_mean = np.nanmean(alpha_psd, axis=1)
-        beta_psd_mean  = np.nanmean(beta_psd,  axis=1)
-        
-        # std
-        delta_psd_std = np.nanstd(delta_psd_mean, axis=0) #should be 1 value now
-        theta_psd_std = np.nanstd(theta_psd_mean, axis=0)
-        alpha_psd_std = np.nanstd(alpha_psd_mean, axis=0)
-        beta_psd_std  = np.nanstd(beta_psd_mean,  axis=0)
-        
-        # Compute the alpha-delta ratio
-        alpha_delta_ratio = alpha_psd_mean/delta_psd_mean 
-        alpha_delta_ratio_mean = np.nanmean(alpha_delta_ratio, axis=0) # 1 value
-        alpha_delta_ratio_std = np.nanstd(alpha_delta_ratio, axis=0) 
-   
-        # Compute Shannon entropy for each channel 
-        shannon_entropies = np.zeros(num_channels)
-        reg_chan = np.zeros(num_channels)
-        for j in range(num_channels):
-            # Compute the probability distribution of the EEG signal for this channel
-            hist, bin_edges = np.histogram(signal_data[j,:], bins=100, density=True)
-            pdf = hist / np.sum(hist)
-            eps = 1e-12 # small constant to add to denominator
-            # Compute the Shannon entropy of the PDF
-            shannon_entropies[j] = -np.sum(pdf * np.log2(pdf+eps)) #array(18,1)
-            # Plot the window
-            # plt.figure()
-            # plt.plot(shannon_entropies)
-            reg_chan[j] = compute_regularity(signal_data[j,:], sampling_frequency) #array(18,1)
-        
-        # Compute average Shannon entropy over channels
-        mean_shannon_entropy = np.nanmean(shannon_entropies, axis=0) 
-        mean_shannon_entropy_std = np.nanstd(shannon_entropies, axis=0)    
-        # Compute the regularity feature over channels 
-        mean_reg = np.nanmean(reg_chan, axis=0)
-        mean_reg_std = np.nanstd(reg_chan, axis=0)
-        
-   
-        quality_score = get_quality_scores(recording_metadata)[index] #one value
-        
-        # Compute the coherence in delta band
-        window_length = int(4 * sampling_frequency)  # in samples
-        window_overlap = int (2 * sampling_frequency)  # in samples
-        window = hann(window_length, sym=True)
-        delta_band = [0.5, 4]
-            
-        all_coherences = np.zeros((18, 18))
-        window = hann(signal_data.shape[1], sym=False)
-        windowed_data = signal_data * window
-   
-        for channel1 in range(signal_data.shape[0]):
-            # apply a Hanning window to the signal
-            windowed_data[channel1, :] = signal_data[channel1, :] * window
-    
-            # loop over all channels again to get coherence values between all possible channel combinations
-            for channel2 in range(channel1+1, signal_data.shape[0]):
-                f, Cxy = coherence(windowed_data[channel1], windowed_data[channel2], fs=sampling_frequency, nperseg=window_length,
-                       window='hann', noverlap=window_overlap, nfft=None, detrend='constant', axis=-1)
-    
-                # calculate the average coherence in the delta band
-                delta_coherence = np.mean(Cxy[(f >= delta_band[0]) & (f <= delta_band[1])], axis=0)
-    
-                # save coherence values for all channel combinations
-                all_coherences[channel1, channel2] += delta_coherence
-                all_coherences[channel2, channel1] += delta_coherence
-           
-           # average the coherence values over epochs and all channel combinations
-        mean_coherence = np.mean(all_coherences, axis=(0, 1))
-        mean_coherence_std = np.std(all_coherences, axis=(0, 1))
-        
-        #Cristian's code
-        sos = signal.butter(6,[0.56, 40], 'bandpass', fs=100, output='sos')
-        signal_data = signal.sosfilt(sos, signal_data)
-        coeff=pywt.wavedec(signal_data,'db4',mode='symmetric',level=4,axis=1) #coeff[subfreq][channels]
-        
-        mean_abs_val_A=np.nanmean(abs(coeff[0]))
-        mean_abs_val_D4=np.nanmean(abs(coeff[1]))
-        mean_abs_val_D3=np.nanmean(abs(coeff[2]))
-        mean_abs_val_D2=np.nanmean(abs(coeff[3]))
-        mean_abs_val_D1=np.nanmean(abs(coeff[4]))
-        
-        ratio_MAE_D4_A=mean_abs_val_D4/mean_abs_val_A
-        ratio_MAE_D3_D4=mean_abs_val_D3/mean_abs_val_D4
-        ratio_MAE_D2_D3=mean_abs_val_D2/mean_abs_val_D3
-        ratio_MAE_D1_D2=mean_abs_val_D1/mean_abs_val_D2
-        
-        
-        mean_absolute_values_A.append(mean_abs_val_A)
-        mean_absolute_values_D4.append(mean_abs_val_D4)
-        mean_absolute_values_D3.append(mean_abs_val_D3)
-        mean_absolute_values_D2.append(mean_abs_val_D2)
-        mean_absolute_values_D1.append(mean_abs_val_D1)
-        
-        MAEratio_D4_A.append(ratio_MAE_D4_A)
-        MAEratio_D3_D4.append(ratio_MAE_D3_D4)
-        MAEratio_D2_D3.append(ratio_MAE_D2_D3)
-        MAEratio_D1_D2.append(ratio_MAE_D1_D2)
-        #available_signal_data.append(signal_data)
-        
-        standard_deviation_A = np.nanmean(np.nanstd(coeff[0],axis=1))
-        standard_deviation_D4 = np.nanmean(np.nanstd(coeff[1],axis=1))
-        standard_deviation_D3 = np.nanmean(np.nanstd(coeff[2],axis=1))
-        standard_deviation_D2 = np.nanmean(np.nanstd(coeff[3],axis=1))
-        standard_deviation_D1 = np.nanmean(np.nanstd(coeff[4],axis=1))
-        
-        sd_A.append(standard_deviation_A)
-        sd_D4.append(standard_deviation_D4)
-        sd_D3.append(standard_deviation_D3)
-        sd_D2.append(standard_deviation_D2)
-        sd_D1.append(standard_deviation_D1)
-        
-        freqs, psd = signal.welch(coeff[0][:][:], sampling_frequency/8)
-        avg_power_A=average_power(psd,freqs,num_channels)
-        freqs, psd = signal.welch(coeff[1][:][:], sampling_frequency/8)
-        avg_power_D4=average_power(psd,freqs,num_channels)
-        freqs, psd = signal.welch(coeff[2][:][:], sampling_frequency/4)
-        avg_power_D3=average_power(psd,freqs,num_channels)
-        freqs, psd = signal.welch(coeff[3][:][:], sampling_frequency/2)
-        avg_power_D2=average_power(psd,freqs,num_channels)
-        freqs, psd = signal.welch(coeff[4][:][:], sampling_frequency)
-        avg_power_D1=average_power(psd,freqs,num_channels)
-        
-        average_power_A.append(avg_power_A)
-        average_power_D4.append(avg_power_D4)
-        average_power_D3.append(avg_power_D3)
-        average_power_D2.append(avg_power_D2)
-        average_power_D1.append(avg_power_D1)
-        
-        entr_A=calculate_entropy(coeff[0],num_channels)
-        entr_D4=calculate_entropy(coeff[1],num_channels)
-        entr_D3=calculate_entropy(coeff[2],num_channels)
-        entr_D2=calculate_entropy(coeff[3],num_channels)
-        entr_D1=calculate_entropy(coeff[4],num_channels)
-        
-        entropy_A.append(entr_A)
-        entropy_D4.append(entr_D4)
-        entropy_D3.append(entr_D3)
-        entropy_D2.append(entr_D2)
-        entropy_D1.append(entr_D1)
+    recording_features=np.hstack((signal_mean, signal_std, delta_psd_mean, theta_psd_mean, alpha_psd_mean, beta_psd_mean, reg_chan, quality_score))
 
-# mean_absolute_values_A=np.nanmean(np.hstack(mean_absolute_values_A))
-# mean_absolute_values_D4=np.nanmean(np.hstack(mean_absolute_values_D4))
-# mean_absolute_values_D3=np.nanmean(np.hstack(mean_absolute_values_D3))
-# mean_absolute_values_D2=np.nanmean(np.hstack(mean_absolute_values_D2))
-# mean_absolute_values_D1=np.nanmean(np.hstack(mean_absolute_values_D1))
-
-# MAEratio_D4_A=np.nanmean(np.hstack(MAEratio_D4_A))
-# MAEratio_D3_D4=np.nanmean(np.hstack(MAEratio_D3_D4))
-# MAEratio_D2_D3=np.nanmean(np.hstack(MAEratio_D2_D3))
-# MAEratio_D1_D2=np.nanmean(np.hstack(MAEratio_D1_D2))
-
-# average_power_A=np.nanmean(np.hstack(average_power_A))
-# average_power_D4=np.nanmean(np.hstack(average_power_D4))
-# average_power_D3=np.nanmean(np.hstack(average_power_D3))
-# average_power_D2=np.nanmean(np.hstack(average_power_D2))
-# average_power_D1=np.nanmean(np.hstack(average_power_D1))
-
-# sd_A=np.nanmean(np.hstack(sd_A))
-# sd_D4=np.nanmean(np.hstack(sd_D4))
-# sd_D3=np.nanmean(np.hstack(sd_D3))
-# sd_D2=np.nanmean(np.hstack(sd_D2))
-# sd_D1=np.nanmean(np.hstack(sd_D1))
-
-# entropy_A=np.nanmean(np.hstack(entropy_A))
-# entropy_D4=np.nanmean(np.hstack(entropy_D4))
-# entropy_D3=np.nanmean(np.hstack(entropy_D3))
-# entropy_D2=np.nanmean(np.hstack(entropy_D2))
-# entropy_D1=np.nanmean(np.hstack(entropy_D1))
-        
-        recording_features = np.hstack((signal_mean, signal_std, signal_power, delta_psd_mean, theta_psd_mean, alpha_psd_mean, 
-                                        beta_psd_mean, quality_score, mean_shannon_entropy, mean_coherence, mean_reg, alpha_delta_ratio, 
-                                        delta_psd_std, theta_psd_std, alpha_psd_std, beta_psd_std,alpha_delta_ratio_std, mean_shannon_entropy_std, 
-                                        mean_reg_std, mean_coherence_std, mean_absolute_values_A,mean_absolute_values_D4,mean_absolute_values_D3,
-                                        mean_absolute_values_D2,mean_absolute_values_D1,average_power_A,average_power_D4,average_power_D3,average_power_D2,
-                                        average_power_D1,sd_A,sd_D4,sd_D3,sd_D2,sd_D1,MAEratio_D4_A,MAEratio_D3_D4,MAEratio_D2_D3,MAEratio_D1_D2,entropy_A,
-                                        entropy_D4,entropy_D3,entropy_D2,entropy_D1))
-
-    else:
-
-        recording_features=np.empty(180) 
-        recording_features[:]=np.nan
-        
-
-    features = np.hstack((patient_features, recording_features))
-
-    return features
-
-#Function to compute power
-def average_power(psd,freqs,num_channels):
-    avg_power=np.zeros(num_channels)
-    for channel in range(num_channels):
-        avg_power[channel] = simps(psd[channel,:], dx=freqs[1] - freqs[0])
-    avg_power=np.nanmean(avg_power)    
-    return avg_power
-
-def calculate_entropy(list_values,num_channels):
-    entropy=np.zeros(num_channels)
-    for channel in range(num_channels):
-        counter_values = Counter(np.around(list_values[channel,:])).most_common()
-        probabilities = [elem[1]/len(list_values) for elem in counter_values]
-        entropy[channel]=scipy.stats.entropy(probabilities)
-    entropy=np.nanmean(entropy)
-    return entropy
+    return recording_features
